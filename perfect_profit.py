@@ -63,7 +63,7 @@ def run_pp_analysis(
     dataset_path: str,
     start_date: str,
     end_date: str,
-    opti_curves_path: str,
+    opti_csv_path: str,
     init_capital: float,
     top_n: int,
     debug: bool = False,
@@ -79,7 +79,7 @@ def run_pp_analysis(
     :param dataset_path:     The filesystem path where dataset CSVs are stored.
     :param start_date:       The start date of the analysis window (YYYY-MM-DD).
     :param end_date:         The end date of the analysis window (YYYY-MM-DD).
-    :param opti_curves_path: File path to a CSV of optimized curves (or directory if logic differs).
+    :param opti_csv_path: File path to a CSV of optimized curves (or directory if logic differs).
     :param init_capital:     The initial capital for the strategy (float).
     :param top_n:            How many top trades per day to sum for Perfect Profit.
     :param debug:            Whether to enable detailed debug logging.
@@ -107,7 +107,7 @@ def run_pp_analysis(
     # Step 2: Compare PP curves with optimized curves
     compare_pp_and_optimized_curves(
         pp_csv_path=pp_csv_path,
-        opti_curves_path=opti_curves_path,
+        opti_csv_path=opti_csv_path,
         start_date=start_date,
         end_date=end_date,
         debug=debug

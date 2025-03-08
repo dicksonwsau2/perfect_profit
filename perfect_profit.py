@@ -38,15 +38,10 @@ from concurrent.futures import (
 )
 from scipy.stats import pearsonr
 from pp_worker import worker_pp_computation
+from correlation_manager import compare_pp_and_optimized_curves
 
 
 def setup_logger(debug: bool = False) -> logging.Logger:
-    """
-    Configure and return a logger instance for debug or info messages.
-
-    :param debug: If True, sets logger level to DEBUG, else INFO.
-    :return: A logging.Logger object named 'pp_logger'.
-    """
     logger = logging.getLogger('pp_logger')
     if not logger.hasHandlers():
         logger.setLevel(logging.DEBUG if debug else logging.INFO)
@@ -57,6 +52,9 @@ def setup_logger(debug: bool = False) -> logging.Logger:
         )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+    else:
+        current_level = logging.DEBUG if debug else logging.INFO
+        logger.setLevel(current_level)
     return logger
 
 
@@ -234,117 +232,3 @@ def compute_pp_curves_for_dataset(
     pp_df.reset_index(inplace=True)
     pp_df.to_csv(output_csv_path, index=False)
     logger.info("PP curves written to %s", output_csv_path)
-
-
-
-def compare_pp_and_optimized_curves(
-    pp_csv_path: str,
-    opti_curves_path: str,
-    start_date: str,
-    end_date: str,
-    debug: bool = False
-) -> None:
-    """
-    Reads the PP curves from `pp_csv_path` and compares each column (tradeplan)
-    to a matching column in the optimized curves file at `opti_curves_path`.
-    Filters both by [start_date..end_date] and computes Pearson correlation.
-
-    Writes a CSV named "pp_correlation.csv" containing columns:
-      - Tradeplan
-      - PearsonCorrelation
-
-    :param pp_csv_path:     Path to the CSV of PP curves.
-    :param opti_curves_path: Path to a CSV of optimized curves (columns should match tradeplan names).
-    :param start_date:       Start date for the comparison window (YYYY-MM-DD).
-    :param end_date:         End date for the comparison window (YYYY-MM-DD).
-    :param debug:            Whether to enable debug-level logging.
-    """
-    logger = setup_logger(debug)
-    logger.info(
-        "Comparing PP curves in %s with optimized curves in %s.",
-        pp_csv_path, opti_curves_path
-    )
-
-    # Load the PP curves
-    try:
-        pp_df = pd.read_csv(pp_csv_path, index_col='date', parse_dates=True)
-    except FileNotFoundError:
-        logger.error("Could not find PP CSV at %s", pp_csv_path)
-        return
-
-    # Load the optimized curves
-    try:
-        opti_df = pd.read_csv(opti_curves_path, index_col='date', parse_dates=True)
-    except FileNotFoundError:
-        logger.error("Could not find optimized curves at %s", opti_curves_path)
-        return
-
-    # Filter by date range
-    mask_pp = (pp_df.index >= start_date) & (pp_df.index <= end_date)
-    mask_opti = (opti_df.index >= start_date) & (opti_df.index <= end_date)
-    pp_df = pp_df.loc[mask_pp]
-    opti_df = opti_df.loc[mask_opti]
-
-    correlations = []
-    for plan in pp_df.columns:
-        if plan in opti_df.columns:
-            corr_val = pearson_correlation(pp_df[plan], opti_df[plan], debug)
-            correlations.append((plan, corr_val))
-        else:
-            logger.warning("No matching optimized column found for '%s'", plan)
-
-    if correlations:
-        corr_df = pd.DataFrame(correlations, columns=['Tradeplan', 'PearsonCorrelation'])
-        corr_df.to_csv("pp_correlation.csv", index=False)
-        logger.info("Wrote correlation metrics to pp_correlation.csv")
-    else:
-        logger.warning("No correlations computed. Possibly no matching tradeplans.")
-
-
-def pearson_correlation(series_a: pd.Series, series_b: pd.Series, debug: bool = False) -> float:
-    """
-    Computes the Pearson Correlation coefficient between two pd.Series.
-
-    :param series_a: First time series.
-    :param series_b: Second time series.
-    :param debug:    If True, uses debug-level logging.
-    :return:         The Pearson correlation (float). Returns 0.0 if either series is empty.
-    """
-    logger = setup_logger(debug)
-    if series_a.empty or series_b.empty:
-        logger.debug("One or both series are empty; returning correlation=0.0.")
-        return 0.0
-
-    from scipy.stats import pearsonr
-    min_len = min(len(series_a), len(series_b))
-    slice_a = series_a.iloc[:min_len]
-    slice_b = series_b.iloc[:min_len]
-
-    corr_val, _ = pearsonr(slice_a, slice_b)
-    return corr_val
-
-
-if __name__ == "__main__":
-    """
-    Example usage of run_pp_analysis with placeholder arguments.
-    Customize these values or replace with argument parsing (e.g. run_cli).
-    """
-    sample_tradeplans = ["1.0_5_1.5x_EMA2040", "1.5_10_2.0x_EMA540"]
-    sample_dataset_path = "path/to/your/dataset"
-    sample_start_date = "2025-01-01"
-    sample_end_date = "2025-01-05"
-    sample_opti_path = "optimized_curves.csv"
-    sample_init_capital = 100_000
-    sample_top_n = 10  # new argument
-
-    run_pp_analysis(
-        tradeplans=sample_tradeplans,
-        dataset_path=r".\sample_dataset.csv",
-        start_date=sample_start_date,
-        end_date=sample_end_date,
-        opti_curves_path=sample_opti_path,
-        init_capital=sample_init_capital,
-        top_n=sample_top_n,
-        debug=True,
-        concurrency="thread"
-    )

@@ -10,7 +10,7 @@ import os
 import tempfile
 import pandas as pd
 from unittest.mock import patch
-from perfect_profit import compute_pp_curves_for_dataset
+from pp_compute  import compute_pp_curves_for_dataset
 
 
 class TestComputePPCurvesForDataset(unittest.TestCase):
@@ -41,7 +41,7 @@ class TestComputePPCurvesForDataset(unittest.TestCase):
         """
         self.temp_dir.cleanup()
 
-    @patch('perfect_profit.worker_pp_computation')
+    @patch('pp_compute.worker_pp_computation')
     def test_compute_pp_curves_for_dataset(self, mock_worker):
         """
         Test that compute_pp_curves_for_dataset calls worker_pp_computation
@@ -56,12 +56,14 @@ class TestComputePPCurvesForDataset(unittest.TestCase):
             date_range,
             init_capital,
             top_n,
+            bp_adjusted,
             debug=False
         ):
             # Ensure the dataset_path, init_capital, top_n match what we passed
             self.assertEqual(dataset_path, self.dataset_path)
             self.assertEqual(init_capital, self.sample_init_capital)
             self.assertEqual(top_n, self.sample_top_n)
+            self.assertTrue(isinstance(bp_adjusted, bool))
 
             # Create a simple Series: [0..len(date_range)-1]
             data = range(len(date_range))
@@ -80,7 +82,8 @@ class TestComputePPCurvesForDataset(unittest.TestCase):
             top_n=self.sample_top_n,                # Pass our sample top_n
             output_csv_path=self.output_csv_path,
             debug=True,
-            concurrency='thread'
+            concurrency='thread',
+            bp_adjusted=True 
         )
 
         # Ensure the worker was called exactly once per tradeplan
@@ -93,7 +96,7 @@ class TestComputePPCurvesForDataset(unittest.TestCase):
         )
 
         # Read the CSV and check the resulting DataFrame
-        df_result = pd.read_csv(self.output_csv_path, index_col='date', parse_dates=True)
+        df_result = pd.read_csv(self.output_csv_path, index_col='Date', parse_dates=True)
         self.assertListEqual(sorted(df_result.columns.tolist()), sorted(self.tradeplans))
         self.assertEqual(df_result.shape, (5, 2))
 
@@ -101,7 +104,7 @@ class TestComputePPCurvesForDataset(unittest.TestCase):
         for plan in self.tradeplans:
             expected_series = pd.Series(range(5), index=index, name=plan)
             # Match the actual index name from CSV
-            expected_series.index.name = "date"
+            expected_series.index.name = "Date"
 
             # Avoid freq mismatch check
             pd.testing.assert_series_equal(

@@ -1,45 +1,17 @@
 """
 perfect_profit.py
 
-Implements Perfect Profit (PP) analysis with optional concurrency for computing
-multiple PP curves in parallel, plus usage of a dataset_path for reading CSV data.
-
-Main Workflow:
-1) run_pp_analysis:
-   - Accepts tradeplans, dataset_path, date range, init_capital, top_n, etc.
-   - Calls compute_pp_curves_for_dataset to create PP curves CSV.
-   - Calls compare_pp_and_optimized_curves to produce correlation metrics.
-
-2) compute_pp_curves_for_dataset:
-   - Takes tradeplans, dataset_path, date range, init_capital, top_n, concurrency mode.
-   - Spawns worker computations (worker_pp_computation) to produce each tradeplan’s PP curve.
-   - Writes a CSV of all combined PP curves.
-
-3) worker_pp_computation:
-   - Receives a single tradeplan, dataset_path, date_range, init_capital, top_n, etc.
-   - Possibly read data from dataset_path and compute daily PP.
-
-4) compare_pp_and_optimized_curves:
-   - Reads the PP CSV, compares it to an optimized CSV, computes Pearson correlation.
-
-5) pearson_correlation:
-   - Calculates Pearson correlation between two Series, returning 0.0 if empty.
+Main orchestrator for Perfect Profit analysis, with optional concurrency and usage of a dataset_path.
 """
 
-import os
 import logging
-import pandas as pd
-import numpy as np
 from typing import List
-from concurrent.futures import (
-    ProcessPoolExecutor,
-    ThreadPoolExecutor,
-    as_completed
-)
-from scipy.stats import pearsonr
-from pp_worker import worker_pp_computation
-from correlation_manager import compare_pp_and_optimized_curves
 
+from correlation_manager import compare_pp_and_optimized_curves
+from pp_compute import compute_pp_curves_for_dataset  # <--- now we import from new module
+
+# if you have a helper function to discover tradeplans from the opti_csv
+from helper import discover_plans_from_opti_csv  # if not empty => skip
 
 def setup_logger(debug: bool = False) -> logging.Logger:
     logger = logging.getLogger('pp_logger')
@@ -57,7 +29,6 @@ def setup_logger(debug: bool = False) -> logging.Logger:
         logger.setLevel(current_level)
     return logger
 
-
 def run_pp_analysis(
     tradeplans: List[str],
     dataset_path: str,
@@ -70,28 +41,28 @@ def run_pp_analysis(
     concurrency: str = "process"
 ) -> None:
     """
-    Orchestrates the Perfect Profit analysis:
-      1) Compute PP curves for the given tradeplans over [start_date..end_date],
-         using dataset_path if needed for reading data, with init_capital and top_n.
-      2) Compare those PP curves to optimized curves, producing correlation metrics.
-
-    :param tradeplans:       A list of tradeplan identifiers (e.g. ["1.0_5_1.5x_EMA2040", ...]).
-    :param dataset_path:     The filesystem path where dataset CSVs are stored.
-    :param start_date:       The start date of the analysis window (YYYY-MM-DD).
-    :param end_date:         The end date of the analysis window (YYYY-MM-DD).
-    :param opti_csv_path: File path to a CSV of optimized curves (or directory if logic differs).
-    :param init_capital:     The initial capital for the strategy (float).
-    :param top_n:            How many top trades per day to sum for Perfect Profit.
-    :param debug:            Whether to enable detailed debug logging.
-    :param concurrency:      Concurrency mode for computing PP curves ("process", "thread", or "sync").
+    Orchestrates the Perfect Profit analysis by:
+      1) If tradeplans is empty => discover from opti_csv using discover_plans_from_opti_csv.
+      2) compute_pp_curves_for_dataset => writes pp_curves.csv
+      3) compare_pp_and_optimized_curves => writes correlation CSV.
     """
     logger = setup_logger(debug)
     logger.info("Starting Perfect Profit analysis...")
 
-    # Output file for PP curves
+    if not tradeplans:
+        logger.info("No tradeplans provided => discovering from opti_csv columns...")
+        discovered = discover_plans_from_opti_csv(opti_csv_path, debug=debug)
+        if not discovered:
+            raise ValueError(
+                "No plan prefixes discovered from opti_csv. "
+                "Cannot proceed with compute_pp_curves_for_dataset."
+            )
+        tradeplans = discovered
+        logger.info(f"Using discovered tradeplans => {tradeplans}")
+
     pp_csv_path = "pp_curves.csv"
 
-    # Step 1: Compute PP curves
+    # step 2 => compute pp curves => final => "pp_curves.csv"
     compute_pp_curves_for_dataset(
         tradeplans=tradeplans,
         dataset_path=dataset_path,
@@ -104,7 +75,7 @@ def run_pp_analysis(
         concurrency=concurrency
     )
 
-    # Step 2: Compare PP curves with optimized curves
+    # step 3 => correlation => writes "pp_correlation_yyyyMMdd_HHMMSS.csv"
     compare_pp_and_optimized_curves(
         pp_csv_path=pp_csv_path,
         opti_csv_path=opti_csv_path,
@@ -116,119 +87,33 @@ def run_pp_analysis(
     logger.info("Perfect Profit analysis completed.")
 
 
-def compute_pp_curves_for_dataset(
-    tradeplans: List[str],
-    dataset_path: str,
-    start_date: str,
-    end_date: str,
-    init_capital: float,
-    top_n: int,
-    output_csv_path: str,
-    bp_adjusted: bool = True,
-    concurrency: str = "process",
-    debug: bool = False
-) -> None:
-    """
-    Computes Perfect Profit (PP) curves for each tradeplan in the given date window,
-    optionally applying 'BP adjustment' if bp_adjusted=True.
-    If any plan fails, we accumulate the original error messages and raise a combined ValueError.
+if __name__ == "__main__":
+    import argparse
 
-    Steps:
-      1) For each tradeplan, run worker_pp_computation(...) in parallel (or sync).
-      2) If any plan fails, store the exception message for that plan in a list.
-      3) At the end, if errors occurred, raise ValueError with all the original messages appended.
-      4) If no errors, combine the resulting Series into a DataFrame => CSV.
+    parser = argparse.ArgumentParser(description="CLI for Perfect Profit analyzer.")
+    parser.add_argument("--dataset_path", required=True)
+    parser.add_argument("--start_date", required=True)
+    parser.add_argument("--end_date", required=True)
+    parser.add_argument("--opti_csv_path", required=True)
+    parser.add_argument("--init_capital", type=float, default=100000.0)
+    parser.add_argument("--top_n", type=int, default=2)
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--concurrency", choices=["process","thread","sync"], default="process")
 
-    :raises ValueError:
-        If any plan's worker_pp_computation fails (like insufficient trades).
-        We include the original messages so tests can match e.g. "only 1 trades, need >= 2".
-    """
-    logger = setup_logger(debug)
-    logger.info(
-        "Computing PP curves for %d tradeplans with init_capital=%.2f, top_n=%d, bp_adjusted=%s...",
-        len(tradeplans), init_capital, top_n, bp_adjusted
+    # user can skip => auto-discover from opti, or pass them => override
+    parser.add_argument("--tradeplan", action="append", default=[],
+                        help="Add plan prefix, e.g. '1.0_5_1.5x_EMA2040'. If empty => auto-discover from opti CSV.")
+
+    args = parser.parse_args()
+
+    run_pp_analysis(
+        tradeplans=args.tradeplan,  # might be empty => auto-discover from opti
+        dataset_path=args.dataset_path,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        opti_csv_path=args.opti_csv_path,
+        init_capital=args.init_capital,
+        top_n=args.top_n,
+        debug=args.debug,
+        concurrency=args.concurrency
     )
-
-    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-
-    if concurrency == "process":
-        ExecutorClass = ProcessPoolExecutor
-    elif concurrency == "thread":
-        ExecutorClass = ThreadPoolExecutor
-    elif concurrency == "sync":
-        ExecutorClass = None
-    else:
-        logger.warning("Unknown concurrency mode '%s', defaulting to 'process'.", concurrency)
-        ExecutorClass = ProcessPoolExecutor
-
-    results = {}
-    # We'll store error messages from any failing plan
-    error_messages = []
-
-    if ExecutorClass is not None:
-        with ExecutorClass() as executor:
-            futures = {}
-            for plan in tradeplans:
-                futures[executor.submit(
-                    worker_pp_computation,
-                    plan,
-                    dataset_path,
-                    date_range,
-                    init_capital,
-                    top_n,
-                    bp_adjusted,
-                    debug
-                )] = plan
-
-            for future in as_completed(futures):
-                plan_name = futures[future]
-                try:
-                    curve_series = future.result()
-                    results[plan_name] = curve_series
-                    logger.debug("Completed PP curve for tradeplan: %s", plan_name)
-                except Exception as e:
-                    msg = f"Plan '{plan_name}' failed: {str(e)}"
-                    logger.error(msg)
-                    error_messages.append(msg)
-    else:
-        # Synchronous path
-        for plan in tradeplans:
-            try:
-                curve_series = worker_pp_computation(
-                    plan, dataset_path, date_range, init_capital,
-                    top_n, bp_adjusted, debug
-                )
-                results[plan] = curve_series
-                logger.debug("Completed PP curve for tradeplan: %s", plan)
-            except Exception as e:
-                msg = f"Plan '{plan}' failed: {str(e)}"
-                logger.error(msg)
-                error_messages.append(msg)
-
-    # If we have any errors, raise a combined ValueError
-    if error_messages:
-        combined = "\n".join(error_messages)
-        raise ValueError(f"One or more tradeplans failed:\n{combined}")
-
-    if not results:
-        logger.warning("No PP curves were computed; output CSV not created.")
-        return
-
-    # (Optional) check date index alignment
-    plan_items = list(results.items())
-    first_plan, first_series = plan_items[0]
-    for plan_name, curve_series in plan_items[1:]:
-        if not curve_series.index.equals(first_series.index):
-            mismatch_msg = (
-                f"Date index mismatch: '{plan_name}' differs from '{first_plan}'. "
-                "Aborting CSV creation."
-            )
-            logger.error(mismatch_msg)
-            raise ValueError(mismatch_msg)
-
-    # Combine columns => final CSV
-    pp_df = pd.DataFrame(results)
-    pp_df.index.name = "Date"
-    pp_df.reset_index(inplace=True)
-    pp_df.to_csv(output_csv_path, index=False)
-    logger.info("PP curves written to %s", output_csv_path)

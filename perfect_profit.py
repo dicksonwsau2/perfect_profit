@@ -6,14 +6,20 @@ Provides the main orchestrator for Perfect Profit analysis, including:
  - A `main_cli` function to parse command-line arguments and call `run_pp_analysis`,
  - An `if __name__ == "__main__": main_cli()` entry point.
 
-All concurrency, dataset reading, correlation, etc. happen inside run_pp_analysis or
-its helper modules (pp_compute, correlation_manager, etc.).
+All concurrency, dataset reading, correlation, etc., happen inside run_pp_analysis
+or its helper modules (pp_compute, correlation_manager, etc.).
+
+Unconditionally, the Perfect Profit CSV is written as:
+  "pp_curves_{YYYYMMDD_HHMMSS}.csv"
+without needing a user-supplied argument for the timestamp.
 """
 
 import argparse
 import logging
 import sys
+from datetime import datetime
 from typing import List
+
 from pp_compute import compute_pp_curves_for_dataset
 from correlation_manager import compare_pp_and_optimized_curves
 from helper import discover_plans_from_opti_csv
@@ -21,15 +27,16 @@ from helper import discover_plans_from_opti_csv
 
 def setup_logger(debug: bool = False) -> logging.Logger:
     """
-    Create or retrieve a logger named 'pp_logger'. If debug=True, sets level=DEBUG; otherwise INFO.
-    A stream handler is attached if none present.
+    Create or retrieve a logger named 'pp_logger'. If debug=True, sets level=DEBUG;
+    otherwise INFO. A stream handler is attached if none are present.
     """
     logger = logging.getLogger("pp_logger")
     if not logger.hasHandlers():
         logger.setLevel(logging.DEBUG if debug else logging.INFO)
         console_handler = logging.StreamHandler()
         formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            "%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
@@ -51,25 +58,25 @@ def run_pp_analysis(
 ) -> None:
     """
     Orchestrates the Perfect Profit analysis by:
-      1) Possibly auto-discovering tradeplans from opti_csv if tradeplans is empty.
-      2) compute_pp_curves_for_dataset => writes 'pp_curves.csv'.
-      3) compare_pp_and_optimized_curves => writes 'pp_correlation_*.csv'.
+      1) Possibly auto-discovering tradeplans from opti_csv (if tradeplans is empty).
+      2) compute_pp_curves_for_dataset => writes a time-stamped "pp_curves_{timestamp}.csv".
+      3) compare_pp_and_optimized_curves => writes "pp_correlation_{timestamp}.csv".
 
-    :param tradeplans: A list of plan strings, e.g. ['1.0_5_1.5x_EMA2040']. 
-                       If empty, we attempt discover_plans_from_opti_csv(opti_csv_path).
+    :param tradeplans:    A list of plan strings, e.g. ['1.0_5_1.5x_EMA2040'].
+                          If empty, we attempt discover_plans_from_opti_csv(opti_csv_path).
     :param dataset_path:  Path where dataset CSV files are stored.
-    :param start_date:     e.g. "2025-01-01"
-    :param end_date:       e.g. "2025-01-05"
-    :param opti_csv_path:  CSV with columns like "2.0_5_1.5x_EMA520_91_61".
-    :param init_capital:   Starting capital (float).
-    :param top_n:          Number of top trades per day to sum for Perfect Profit.
-    :param debug:          If True, enable debug logging.
-    :param concurrency:    One of {"process","thread","sync"} for concurrency mode.
+    :param start_date:    e.g. "2025-01-01".
+    :param end_date:      e.g. "2025-01-05".
+    :param opti_csv_path: CSV with columns like "2.0_5_1.5x_EMA520_91_61".
+    :param init_capital:  Starting capital (float).
+    :param top_n:         Number of top trades per day to sum for Perfect Profit.
+    :param debug:         If True, enable debug logging.
+    :param concurrency:   One of {"process", "thread", "sync"} for concurrency mode.
     """
     logger = setup_logger(debug)
     logger.info("Starting Perfect Profit analysis...")
 
-    # If tradeplans is empty => discover them from opti_csv
+    # If tradeplans is empty => discover from opti_csv
     if not tradeplans:
         logger.info("No tradeplans provided => discovering from opti_csv columns...")
         discovered = discover_plans_from_opti_csv(opti_csv_path, debug=debug)
@@ -81,8 +88,11 @@ def run_pp_analysis(
         tradeplans = discovered
         logger.info("Using discovered tradeplans => %s", tradeplans)
 
-    # Step 1: Compute PP curves => writes 'pp_curves.csv'
-    pp_csv_path = "pp_curves.csv"
+    # Build a timestamped filename for the PP curves CSV
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pp_csv_path = f"pp_curves_{timestamp}.csv"
+
+    # Step 1: Compute PP curves => writes 'pp_curves_{timestamp}.csv'
     compute_pp_curves_for_dataset(
         tradeplans=tradeplans,
         dataset_path=dataset_path,
@@ -109,9 +119,8 @@ def run_pp_analysis(
 
 def main_cli() -> None:
     """
-    Command-line entry point for Perfect Profit. 
-    Parses sys.argv with argparse, then calls run_pp_analysis(...) 
-    with the resulting arguments.
+    Command-line entry point for Perfect Profit. Parses sys.argv with argparse,
+    then calls run_pp_analysis(...) with the resulting arguments.
     """
     parser = argparse.ArgumentParser(description="CLI for Perfect Profit analyzer.")
     parser.add_argument("--dataset_path", required=True, help="Directory for dataset CSVs.")

@@ -282,7 +282,7 @@ def create_equity_curve(
         max_width = config['tradeplan']['MAX_WIDTH']
         scaling_factor = max_width / float(plan_params['width'])
         logger.debug(f"Scaling factor applied: {scaling_factor}")
-        daily_pp = daily_pp * scaling_factor
+        daily_pp = daily_pp * scaling_factor * 100
 
     # Calculate the cumulative sum of daily PP and add the initial capital
     equity_curve = init_capital + daily_pp.cumsum()

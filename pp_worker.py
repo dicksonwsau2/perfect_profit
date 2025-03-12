@@ -172,7 +172,6 @@ def read_dataset_for_plan(
     return df
 
 
-
 def compute_daily_pp(
     df: pd.DataFrame,
     date_range: pd.DatetimeIndex,
@@ -261,14 +260,48 @@ def create_equity_curve(
     debug: bool = False
 ) -> pd.Series:
     """
-    Convert daily Perfect Profit values to a cumulative equity curve, starting at init_capital.
+    Generate a cumulative equity curve from daily Perfect Profit results.
 
-    :param daily_pp: A Series of daily PP, indexed by date.
-    :param init_capital: The initial capital (float).
-    :param plan_params: Dictionary containing tradeplan parameters like 'premium', 'width', etc.
-    :param bp_adjusted: If True, adjusts the daily PP based on a scaling factor.
-    :param debug: Enable debug-level logging.
-    :return: A Series of the same index representing the equity curve: init_capital + cumsum(daily_pp).
+    This function takes a Series of daily PP (Perfect Profit) values and 
+    accumulates them into an equity curve, starting from the specified
+    initial capital. If `bp_adjusted` is True, it also applies a scaling factor
+    based on the 'width' field in the tradeplan and the 'MAX_WIDTH' value
+    from a YAML config file (loaded via `load_config`). 
+
+    For the two known multi-width patterns ("20-25-30" and "45-50-55"), it
+    automatically uses the largest width value (30 or 55, respectively). 
+    Otherwise, it attempts to parse `plan_params['width']` as a float. 
+    If that fails, a ValueError is raised.
+
+    Finally, the daily PP is multiplied by both the scaling factor and 100 
+    before the cumulative sum is calculated.
+
+    Parameters
+    ----------
+    daily_pp : pd.Series
+        A Series of daily PP (Perfect Profit) values, indexed by date.
+    init_capital : float
+        The initial capital from which the equity curve starts.
+    plan_params : Dict[str, Any]
+        A dictionary of parsed tradeplan parameters, including 'width'.
+    bp_adjusted : bool, optional
+        Whether to apply the buying-power scaling factor to the daily PP.
+        Defaults to False.
+    debug : bool, optional
+        If True, enable debug-level logging for this function. 
+        Defaults to False.
+
+    Returns
+    -------
+    pd.Series
+        The resulting equity curve (indexed by date). The tradeplan parameters
+        are stored in `equity_curve.attrs['plan_params']`.
+
+    Raises
+    ------
+    ValueError
+        If `plan_params['width']` is neither a valid float nor one of the known
+        multi-width patterns ("20-25-30" or "45-50-55").
     """
     logger = setup_logger(debug)
     logger.debug(
@@ -277,17 +310,38 @@ def create_equity_curve(
     )
 
     if bp_adjusted:
-        # Get scaling factor from configuration and apply it to daily_pp
         config = load_config()
         max_width = config['tradeplan']['MAX_WIDTH']
-        scaling_factor = max_width / float(plan_params['width'])
-        logger.debug(f"Scaling factor applied: {scaling_factor}")
+        raw_width = plan_params['width']
+
+        # Handle known multi-width strings
+        if raw_width == "20-25-30":
+            numeric_width = 30.0
+        elif raw_width == "45-50-55":
+            numeric_width = 55.0
+        else:
+            # Otherwise, parse as float or raise an error
+            try:
+                numeric_width = float(raw_width)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Unrecognized width format '{raw_width}'. "
+                    "Must be numeric or one of the known multi-width patterns."
+                ) from exc
+
+        scaling_factor = max_width / numeric_width
+        logger.debug(
+            "Applying scaling factor: max_width=%.2f / width=%.2f => %.4f",
+            max_width, numeric_width, scaling_factor
+        )
+
+        # Apply scaling factor and multiply by 100
         daily_pp = daily_pp * scaling_factor * 100
 
     # Calculate the cumulative sum of daily PP and add the initial capital
     equity_curve = init_capital + daily_pp.cumsum()
 
-    # Attach the plan_params dictionary directly to the equity curve
+    # Attach plan_params for reference
     equity_curve.attrs['plan_params'] = plan_params
 
     logger.debug("create_equity_curve returning final equity curve.")
